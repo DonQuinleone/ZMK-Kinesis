@@ -136,21 +136,22 @@ compatibility. To use F13-F24 or the INTL1-9 keys with NKRO, change
 
 ## Battery reporting
 
-The left module reports its own battery level over BLE and proxies
-the right module's as a second battery service, so a host sees
-both. Three settings in
-[adv360_left_defconfig](config/boards/arm/adv360/adv360_left_defconfig)
-turn it on:
+The left module reports its battery level over BLE through
+`CONFIG_BT_BAS=y` in
+[adv360_left_defconfig](config/boards/arm/adv360/adv360_left_defconfig).
 
-```
-CONFIG_BT_BAS=y
-CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING=y
-CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY=y
-```
+The fork can also proxy the right module's level as a second
+battery service, with
+`CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING` and
+`CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY`. Do not: BlueZ
+rejects a device with more than one battery service, and the two
+extra services shift every GATT handle above them, so a host that
+is already bonded reads HID at the old handles and the keyboard
+connects but types nothing until it is re-paired.
 
 Reporting can cause some computers to wake repeatedly. If that
-happens, set all three back to `n`; holding Mod+H still shows the
-level on the underglow LEDs.
+happens, set `CONFIG_BT_BAS` back to `n`; holding Mod+H still
+shows the level on the underglow LEDs.
 
 ## Modifier indicator colour
 
