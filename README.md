@@ -136,10 +136,21 @@ compatibility. To use F13-F24 or the INTL1-9 keys with NKRO, change
 
 ## Battery reporting
 
-Reporting the battery level over BLE is disabled by default, as it
-can cause some computers to wake repeatedly. To enable it, change
-`CONFIG_BT_BAS=n` to `CONFIG_BT_BAS=y` in
-[adv360_left_defconfig](config/boards/arm/adv360/adv360_left_defconfig#L58).
+The left module reports its own battery level over BLE and proxies
+the right module's as a second battery service, so a host sees
+both. Three settings in
+[adv360_left_defconfig](config/boards/arm/adv360/adv360_left_defconfig)
+turn it on:
+
+```
+CONFIG_BT_BAS=y
+CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING=y
+CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY=y
+```
+
+Reporting can cause some computers to wake repeatedly. If that
+happens, set all three back to `n`; holding Mod+H still shows the
+level on the underglow LEDs.
 
 ## Modifier indicator colour
 
