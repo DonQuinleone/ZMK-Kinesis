@@ -18,6 +18,24 @@ Some ZMK features (combos, for example) need the exact key
 positions in the matrix. These are available in both image and text
 form [here](assets/key-positions.md).
 
+## Mod layer
+
+Holding Mod, the inner key on the right module's top row, reaches
+the shortcuts below. Keys are named by what they type on the base
+layer.
+
+| Shortcut | Effect |
+| --- | --- |
+| Mod+K / Mod+J | Backlight brighter / dimmer |
+| Mod+Tab | Backlight on/off |
+| Mod+Enter | Underglow on/off |
+| Mod+H | Show the battery level while held |
+| Mod+1 to Mod+5 | Select a Bluetooth profile |
+| Mod+left GUI | Clear the selected Bluetooth profile |
+| Mod+macro1 / Mod+macro3 | Left / right module bootloader |
+| Mod+Esc | Unlock ZMK Studio |
+| Mod+V | Type the firmware version |
+
 ## Building the firmware
 
 The firmware is built inside a container. `make` drives the build
