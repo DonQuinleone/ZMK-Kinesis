@@ -36,6 +36,32 @@ layer.
 | Mod+Esc | Unlock ZMK Studio |
 | Mod+V | Type the firmware version |
 
+## Mouse layer
+
+The inner key on the right module's third row toggles the mouse
+layer on, and the same key toggles it off again. Both modules
+light their layer LEDs red while it is active. Keys are named by
+what they type on the base layer.
+
+| Key | Effect |
+| --- | --- |
+| I / K | Pointer up / down |
+| J / L | Pointer left / right |
+| E / D | Scroll up / down |
+| S / F | Scroll left / right |
+| Space / Enter | Left click |
+| Backspace / Tab | Right click |
+| Tilde / Delete | Middle click |
+
+Clicks are mirrored across both thumb clusters, so whichever thumb
+is free can click while the other hand drives the pointer. The
+pointer accelerates towards a top speed rather than moving a fixed
+distance per tick, and scrolling covers both axes, so sideways
+scrolling needs no mouse.
+
+Every key not listed keeps the meaning it has on the layer below,
+so ordinary typing still works if the layer is left switched on.
+
 ## Building the firmware
 
 The firmware is built inside a container. `make` drives the build
