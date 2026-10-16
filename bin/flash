@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROGRAM=${0##*/}
+ROOT=$(git -C "$(dirname -- "$(readlink -f -- "$0")")" \
+    rev-parse --show-toplevel)
+readonly PROGRAM ROOT
+readonly FIRMWARE=$ROOT/firmware
+readonly DRIVE_LABEL=ADV360PRO
+readonly DRIVE_WAIT_SECONDS=120
+readonly COPY_SETTLE_SECONDS=5
+readonly POLL_SECONDS=1
+readonly COMMIT_PATTERN='^[0-9a-f]{7,}$'
+readonly VERSION_COMMIT_FIELD=3
+
+readonly PREREQUISITES=(
+    "git:git"
+    "make:make"
+    "lsblk:util-linux"
+    "findmnt:util-linux"
+    "udevadm:systemd-udev"
+    "udisksctl:udisks2"
+)
+readonly CONTAINER_ENGINES=(podman docker)
+declare -Ar BOOTLOADER_KEYS=([left]=Mod+macro1 [right]=Mod+macro3)
+
+readonly STEPS=(
+    "-c|--check|check|check the prerequisites only"
+    "-k|--current|current|read the version on the keyboard only"
+    "-b|--build|build|build the firmware only"
+    "-f|--flash|flash|flash the firmware already built for HEAD"
+)
+
+option_line() {
+    printf '  %s, %-12s%s\n' "$1" "$2" "$3"
+}
+
+usage() {
+    local entry short long description
+
+    cat <<EOF
+Usage: $PROGRAM [OPTION]
+Build the Advantage 360 Pro firmware and flash it onto both halves.
+
+With no option, check the prerequisites, read the version on the
+keyboard, build, then walk through flashing each half.
+
+EOF
+    for entry in "${STEPS[@]}"; do
+        IFS='|' read -r short long _ description <<<"$entry"
+        option_line "$short" "$long" "$description"
+    done
+    option_line -h --help "display this help and exit"
+    option_line -V --version "output version information and exit"
+}
+
+version() {
+    say "$PROGRAM $(git -C "$ROOT" describe --always --dirty)"
+}
+
+die() {
+    printf '%s: %s\n' "$PROGRAM" "$*" >&2
+    exit 1
+}
+
+usage_error() {
+    printf '%s: %s\n' "$PROGRAM" "$*" >&2
+    printf "Try '%s --help' for more information.\n" "$PROGRAM" >&2
+    exit 2
+}
+
+say() {
+    printf '%s\n' "$*"
+}
+
+ask() {
+    printf '%s ' "$1"
+    read -r REPLY || die "no answer read"
+}
+
+require_terminal() {
+    [ -t 0 ] || die "this step is interactive and needs a terminal"
+}
+
+head_commit() {
+    git -C "$ROOT" rev-parse --short HEAD
+}
+
+installed() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+container_engine_installed() {
+    local engine
+
+    for engine in "${CONTAINER_ENGINES[@]}"; do
+        installed "$engine" && return 0
+    done
+    return 1
+}
+
+check() {
+    local entry item missing=()
+
+    for entry in "${PREREQUISITES[@]}"; do
+        installed "${entry%%:*}" ||
+            missing+=("${entry%%:*} (dnf install ${entry#*:})")
+    done
+    container_engine_installed || missing+=("one of \
+${CONTAINER_ENGINES[*]} (dnf install ${CONTAINER_ENGINES[0]})")
+
+    ((${#missing[@]} == 0)) || {
+        for item in "${missing[@]}"; do
+            printf '%s: missing %s\n' "$PROGRAM" "$item" >&2
+        done
+        exit 1
+    }
+    say "All prerequisites are installed."
+}
+
+current() {
+    local flashed head
+
+    require_terminal
+    ask "Press Mod+V on the keyboard, or Enter to skip:"
+    [ -n "$REPLY" ] || return 0
+
+    flashed=$(printf '%s\n' "$REPLY" |
+        cut -s -d- -f"$VERSION_COMMIT_FIELD")
+    [[ $flashed =~ $COMMIT_PATTERN ]] ||
+        die "'$REPLY' is not a firmware version"
+
+    head=$(head_commit)
+    case $head in
+        "$flashed"*) say "The keyboard runs $REPLY, which is HEAD." ;;
+        *) say "The keyboard runs $REPLY, but HEAD is $head." ;;
+    esac
+}
+
+build() {
+    require_terminal
+    say "Building the firmware for $(head_commit)."
+    (cd "$ROOT" && make)
+}
+
+image() {
+    local side=$1 found
+
+    found=$(find "$FIRMWARE" -maxdepth 1 \
+        -name "*-$(head_commit)-$side-*.uf2" | sort | tail -n 1)
+    [ -n "$found" ] ||
+        die "no $side firmware for $(head_commit); build it first"
+    printf '%s\n' "$found"
+}
+
+drive() {
+    lsblk -rno PATH,LABEL | awk -v label="$DRIVE_LABEL" \
+        '$2 == label { print $1; exit }'
+}
+
+drive_present() {
+    [ -n "$(drive)" ]
+}
+
+drive_gone() {
+    [ -z "$(drive)" ]
+}
+
+mounted_at() {
+    findmnt -rno TARGET --source "$DEVICE" || true
+}
+
+drive_mounted() {
+    [ -n "$(mounted_at)" ] && return 0
+    MOUNT_ERROR=$(udisksctl mount --no-user-interaction \
+        -b "$DEVICE" 2>&1 >/dev/null) || true
+    [ -n "$(mounted_at)" ]
+}
+
+wait_until() {
+    local timeout=$1 condition=$2 waited=0
+
+    until "$condition"; do
+        ((waited < timeout)) || return 1
+        sleep "$POLL_SECONDS"
+        waited=$((waited + POLL_SECONDS))
+    done
+}
+
+wait_for_drive_to_go() {
+    wait_until "$DRIVE_WAIT_SECONDS" drive_gone ||
+        die "the $DRIVE_LABEL drive never went away"
+}
+
+serial_of() {
+    udevadm info --query=property --name="$DEVICE" |
+        sed -n 's/^ID_SERIAL_SHORT=//p'
+}
+
+copy_image() {
+    local image=$1 target
+
+    MOUNT_ERROR=""
+    wait_until "$DRIVE_WAIT_SECONDS" drive_mounted ||
+        die "cannot mount $DEVICE${MOUNT_ERROR:+: $MOUNT_ERROR}"
+    target=$(mounted_at)
+    say "Copying $(basename -- "$image") to $target."
+    cp -- "$image" "$target/" && sync -f -- "$target" && return 0
+
+    # The half reboots as soon as it has the image, so the drive
+    # vanishing mid-copy is the normal way for a flash to end.
+    wait_until "$COPY_SETTLE_SECONDS" drive_gone ||
+        die "copying to $target failed"
+}
+
+find_half() {
+    local side=$1 refused_serial=$2 keys=${BOOTLOADER_KEYS[$1]}
+
+    while true; do
+        say "Waiting for the $DRIVE_LABEL drive."
+        wait_until "$DRIVE_WAIT_SECONDS" drive_present ||
+            die "no $DRIVE_LABEL drive appeared"
+        DEVICE=$(drive)
+        FLASHED_SERIAL=$(serial_of)
+        [ -n "$FLASHED_SERIAL" ] ||
+            die "$DEVICE reports no serial number"
+        [ "$FLASHED_SERIAL" = "$refused_serial" ] || return 0
+
+        say "That is the half just flashed. Press its reset button to"
+        say "leave bootloader mode, then press $keys to put the $side"
+        say "half into bootloader mode."
+        wait_for_drive_to_go
+    done
+}
+
+flash_half() {
+    local side=$1 image=$2 refused_serial=$3
+
+    find_half "$side" "$refused_serial"
+    copy_image "$image"
+    wait_for_drive_to_go
+    say "The $side half is flashed."
+}
+
+flash() {
+    local left right left_serial
+
+    require_terminal
+    left=$(image left)
+    right=$(image right)
+
+    say "Connect the left half over USB."
+    ask "Press Enter, then ${BOOTLOADER_KEYS[left]} for bootloader."
+    flash_half left "$left" ""
+    left_serial=$FLASHED_SERIAL
+
+    say "Next, the right half. After pressing Enter, power off both"
+    say "halves, switch the left half on, connect the right half over"
+    say "USB and press ${BOOTLOADER_KEYS[right]} for bootloader mode."
+    ask "Press Enter to start:"
+    flash_half right "$right" "$left_serial"
+
+    (cd "$ROOT" && make -s clean_firmware)
+    say "Both halves are flashed. Unplug the right half and switch"
+    say "it on."
+}
+
+everything() {
+    require_terminal
+    check
+    current
+    build
+    flash
+}
+
+step_for() {
+    local entry short long step
+
+    for entry in "${STEPS[@]}"; do
+        IFS='|' read -r short long step _ <<<"$entry"
+        [ "$1" = "$short" ] || [ "$1" = "$long" ] || continue
+        printf '%s\n' "$step"
+        return 0
+    done
+    return 1
+}
+
+unknown_argument() {
+    case $1 in
+        -?*) usage_error "unrecognised option '$1'" ;;
+        *) usage_error "unexpected argument '$1'" ;;
+    esac
+}
+
+main() {
+    local step="" chosen
+
+    while (($# > 0)); do
+        case $1 in
+            -h | --help) usage; exit 0 ;;
+            -V | --version) version; exit 0 ;;
+            --) shift; break ;;
+        esac
+        chosen=$(step_for "$1") || unknown_argument "$1"
+        [ -z "$step" ] ||
+            usage_error "give only one of the step options"
+        step=$chosen
+        shift
+    done
+    (($# == 0)) || usage_error "unexpected argument '$1'"
+
+    "${step:-everything}"
+}
+
+main "$@"
