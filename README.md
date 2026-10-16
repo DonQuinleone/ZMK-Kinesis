@@ -71,6 +71,8 @@ Creating the docker container takes some time. Therefore `make clean_firmware` c
 
 ## Flashing firmware
 
+Locally, `make flash` checks the prerequisites, reads the version on the keyboard, builds the firmware and walks you through flashing both halves. `bin/flash --help` lists the options for running a single step.
+
 Follow the programming instruction on page 8 of the [Quick Start Guide](https://kinesis-ergo.com/wp-content/uploads/Advantage360-Professional-QSG-v8-25-22.pdf) to flash the firmware.
 
 ### Overview
