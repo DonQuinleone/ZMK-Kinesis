@@ -9,7 +9,7 @@ SELINUX1 := :z
 SELINUX2 := ,z
 endif
 
-.PHONY: all left clean_firmware clean_image clean
+.PHONY: all left flash clean_firmware clean_image clean
 
 all:
 	$(shell bin/get_version_local.sh clique >> /dev/null)
@@ -34,6 +34,9 @@ left:
 		-e BUILD_RIGHT=false \
 		zmk
 	git checkout config/version.dtsi
+
+flash:
+	bin/flash
 
 clean_firmware:
 	rm -f firmware/*.uf2
